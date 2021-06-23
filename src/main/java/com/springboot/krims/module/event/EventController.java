@@ -1,12 +1,16 @@
 package com.springboot.krims.module.event;
 
-import com.springboot.krims.dto.Alert;
-import com.springboot.krims.dto.DefaultResponse;
-import com.springboot.krims.dto.Event;
+import com.springboot.krims.dto.*;
 import com.springboot.krims.repositories.AlertRepository;
 import com.springboot.krims.repositories.EventRepository;
+import com.springboot.krims.repositories.IncidentRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 @RestController
 @CrossOrigin(origins = "http://localhost:8081")
@@ -18,6 +22,9 @@ public class EventController {
 
     @Autowired
     private AlertRepository alertRepository;
+
+    @Autowired
+    private IncidentRepository incidentRepository;
 
     @GetMapping("/events")
     public @ResponseBody
@@ -41,20 +48,23 @@ public class EventController {
         event.setDedupekey(dedupeKey);
 
         Event newEvent = eventRepository.save(event);
-        createAlert(newEvent);
-
+        Alert alert = createAlert(newEvent);
+        createIncident(alert);
         return new DefaultResponse("success", "Event added");
     }
 
-    private void createAlert(Event event) {
+    private Alert createAlert(Event event) {
+        Alert x = null;
+
         // Check for open alerts with dedupe key
         Alert existingAlert = alertRepository.findAlertsByDedupekeyAndStatus(dedupeKey, "Open");
 
         if (existingAlert == null) {
             Alert alert = Alert.builder().dedupekey(dedupeKey).description(event.getDescription()).source(event.getSource())
                     .location(event.getLocation()).service(event.getService()).base(event.getBase())
-                    .status("Open").severity(event.getSeverity()).total_events(1).assignee("").build();
+                    .status("Open").severity(event.getSeverity()).total_events(1).assignee("Unassigned").build();
             alertRepository.save(alert);
+            x = alert;
         } else {
             // Update existing alert
             existingAlert.setDescription(event.getDescription());
@@ -64,6 +74,57 @@ public class EventController {
             existingAlert.setProcessed(true);
             alertRepository.save(existingAlert);
             System.out.println("Updating existing alert");
+            x = existingAlert;
         }
+
+        return x;
+    }
+
+    private Incident createIncident(Alert alert) {
+        Incident x = null;
+        boolean incidentUpdated = false;
+
+        // Get all open incidents
+        List<Incident> incidents = incidentRepository.findIncidentsByStatus("Open");
+        for (Incident incident : incidents) {
+            int total_sources = incident.getSources().split(",").length;
+            Set<String> sources = new HashSet<>(Arrays.asList(incident.getSources().split(",")));
+            if (sources.contains(alert.getSource())) {
+                // Update current incident and break
+                incident.setDescription(total_sources + " sources affected");
+                incident.setTotal_alerts(incident.getTotal_alerts() + 1);
+                incidentRepository.save(incident);
+                incidentUpdated = true;
+                break;
+            } else {
+                for (String source : sources) {
+                    int similarity = Shingles.getSimilarityPercent(source, alert.getSource());
+                    if (similarity > 50) {
+                        // Update current incident and break
+                        ++total_sources;
+                        incident.setDescription(total_sources + " sources affected");
+                        incident.setSources(incident.getSources() + ", " + alert.getSource());
+                        incident.setTotal_alerts(incident.getTotal_alerts() + 1);
+                        incidentRepository.save(incident);
+                        incidentUpdated = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Create new incident
+        if (!incidentUpdated) {
+            Incident incident = Incident.builder()
+                    .description(alert.getSource() + " affected")
+                    .assignee("Unassigned")
+                    .severity(alert.getSeverity())
+                    .status("Open")
+                    .sources(alert.getSource())
+                    .total_alerts(1)
+                    .build();
+            incidentRepository.save(incident);
+        }
+        return x;
     }
 }

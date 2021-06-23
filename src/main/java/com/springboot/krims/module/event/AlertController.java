@@ -28,4 +28,11 @@ public class AlertController {
         alertRepository.save(alert);
         return new DefaultResponse("success", "Event added");
     }
+
+    @PatchMapping(path = "/alerts/{id}", consumes = "application/json")
+    public @ResponseBody
+    DefaultResponse patchAlert(@PathVariable String id, @RequestBody Alert alert) {
+        alertRepository.save(alert);
+        return new DefaultResponse("success", "Alert updated");
+    }
 }
